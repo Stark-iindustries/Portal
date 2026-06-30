@@ -1,0 +1,109 @@
+name: Extract archives and flatten single top-level folder
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip p7zip-full rsync
+
+      - name: Find, extract and flatten archives, commit changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob dotglob
+
+          # Only examine archive files in the repository root
+          archives=()
+          for p in *.zip *.tar *.tar.gz *.tgz *.tar.bz2 *.tbz2 *.7z; do
+            [ -f "$p" ] || continue
+            case "$p" in
+              .git/* | .github/*) continue ;;
+            esac
+            archives+=("$p")
+          done
+
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No archives found in repo root. Nothing to extract."
+            exit 0
+          fi
+
+          workspace="$PWD"
+          echo "Found ${#archives[@]} archive(s):"
+          printf ' - %s\n' "${archives[@]}"
+
+          for archive in "${archives[@]}"; do
+            echo "Processing archive: $archive"
+            tmpdir=$(mktemp -d)
+            echo "Extracting to $tmpdir"
+
+            case "$archive" in
+              *.zip)
+                unzip -q "$archive" -d "$tmpdir"
+                ;;
+              *.tar.gz|*.tgz)
+                tar -xzf "$archive" -C "$tmpdir"
+                ;;
+              *.tar.bz2|*.tbz2)
+                tar -xjf "$archive" -C "$tmpdir"
+                ;;
+              *.tar)
+                tar -xf "$archive" -C "$tmpdir"
+                ;;
+              *.7z)
+                7z x -y -o"$tmpdir" "$archive" >/dev/null
+                ;;
+              *)
+                echo "Unsupported archive type for $archive, skipping."
+                rm -rf "$tmpdir"
+                continue
+                ;;
+            esac
+
+            # If extraction produced a single top-level directory, flatten by moving its children up
+            entries=( "$tmpdir"/* )
+            if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
+              topdir="${entries[0]}"
+              echo "Single top-level directory detected: $(basename "$topdir") — flattening its contents to repo root"
+              # Move all items (including dotfiles) from topdir to workspace root, overwriting if necessary
+              rsync -a --no-perms --chown="$(id -u):$(id -g)" --remove-source-files "$topdir"/ "$workspace"/
+              # remove any empty directories left in tmpdir
+              rm -rf "$topdir"
+            else
+              echo "Multiple top-level entries or files detected — copying extracted content to repo root"
+              rsync -a --no-perms --chown="$(id -u):$(id -g)" --remove-source-files "$tmpdir"/ "$workspace"/
+            fi
+
+            rm -rf "$tmpdir"
+
+            # Remove the original archive from git so it won't remain in the repo
+            git rm --ignore-unmatch "$archive" || true
+          done
+
+          # Stage all changes and commit only if there are changes
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit after extraction"
+            exit 0
+          fi
+
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Extract archives and remove original archive(s)"
+          # Push back to the branch that triggered the workflow (main)
+          git push origin HEAD:main
+          
