@@ -1,0 +1,20 @@
+{
+  "name": "botify-x-pairing",
+  "version": "1.0.0",
+  "description": "BOTIFY-X WhatsApp Pairing Portal",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.18",
+    "adm-zip": "^0.5.16",
+    "express": "^4.19.2",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
