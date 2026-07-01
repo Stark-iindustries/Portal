@@ -73,7 +73,7 @@ app.post('/generate', async (req, res) => {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
             },
-            browser: Browsers.ubuntu('Chrome'),
+            browser: Browsers.ubuntu('Edge'),
             printQRInTerminal: false,
         });
 
