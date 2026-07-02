@@ -32,21 +32,16 @@ app.use(express.static(PUBLIC_DIR));
 // Active pairing sessions: { id → { status, code, sessionStr, error } }
 const sessions = new Map();
 
-// ─── Build session string from session folder ─────────────────────────────────
+// ─── Build session string ─────────────────────────────────────────────────────
 async function buildSessionString(sessionId) {
     const dir   = path.join(SESSION_DIR, sessionId);
     const zip   = new AdmZip();
-    const files = fs.readdirSync(dir);
-    for (const f of files) zip.addLocalFile(path.join(dir, f));
-    const buf     = zip.toBuffer();
-    const encoded = buf.toString('base64').replace(/\//g, '*');
+    for (const f of fs.readdirSync(dir)) zip.addLocalFile(path.join(dir, f));
+    const encoded = zip.toBuffer().toString('base64').replace(/\//g, '*');
     return `BOTIFY-X=${encoded}`;
 }
 
 // ─── POST /generate ───────────────────────────────────────────────────────────
-// Starts the Baileys socket, requests pairing code when the WA WebSocket is
-// ready (on the 'qr' event), and responds immediately with sessionId so the
-// client can poll /status for the code + final session string.
 app.post('/generate', async (req, res) => {
     const { number } = req.body;
     if (!number || !/^\d{7,15}$/.test(number.replace(/\D/g, ''))) {
@@ -56,43 +51,40 @@ app.post('/generate', async (req, res) => {
     const cleanNumber = number.replace(/\D/g, '');
     const sessionId   = `session_${cleanNumber}_${Date.now()}`;
     const sessionDir  = path.join(SESSION_DIR, sessionId);
-
     fs.mkdirSync(sessionDir, { recursive: true });
 
     const info = { status: 'pending', code: null, sessionStr: null, error: null };
     sessions.set(sessionId, info);
 
-    // Respond immediately — client will poll /status for code + result
+    // Respond immediately so the client can show the waiting screen and start polling
     res.json({ sessionId });
 
-    // ── Start socket (async, does not block the response) ────────────────────
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-        const { version }          = await fetchLatestBaileysVersion();
+    // ── Start pairing socket (async) ─────────────────────────────────────────
+    ;(async () => {
+        try {
+            const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+            const { version }          = await fetchLatestBaileysVersion();
 
-        const sock = makeWASocket({
-            version,
-            logger: pino({ level: 'silent' }),
-            auth: {
-                creds: state.creds,
-                keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-            },
-            // Chrome fingerprint — triggers WA notification reliably
-            browser:           Browsers.ubuntu('Chrome'),
-            printQRInTerminal: false,
-            syncFullHistory:   false,
-            getMessage:        async () => ({ conversation: '' }),
-        });
+            const sock = makeWASocket({
+                version,
+                logger: pino({ level: 'silent' }),
+                auth: {
+                    creds: state.creds,
+                    keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+                },
+                // Chrome fingerprint — most reliable for triggering WA's notification
+                browser:              Browsers.ubuntu('Chrome'),
+                printQRInTerminal:    false,
+                syncFullHistory:      false,
+                markOnlineOnConnect:  false,
+                getMessage:           async () => ({ conversation: '' }),
+            });
 
-        let codeRequested = false;
+            let codeRequested = false;
 
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, qr, lastDisconnect } = update;
-
-            // 'qr' fires when the WA WebSocket handshake is complete and the
-            // server is waiting for QR or pairing. This is the correct moment
-            // to call requestPairingCode — NOT after an arbitrary timeout.
-            if (qr && !codeRequested && !sock.authState.creds.registered) {
+            // Helper: request pairing code and store result
+            const requestCode = async () => {
+                if (codeRequested || sock.authState.creds.registered) return;
                 codeRequested = true;
                 try {
                     const code      = await sock.requestPairingCode(cleanNumber);
@@ -100,36 +92,56 @@ app.post('/generate', async (req, res) => {
                     info.code   = formatted;
                     info.status = 'code_ready';
                 } catch (e) {
+                    if (!codeRequested) return; // already handled
                     info.status = 'error';
-                    info.error  = 'Failed to get pairing code: ' + e.message;
+                    info.error  = 'Pairing code request failed: ' + e.message;
                 }
-            }
+            };
 
-            if (connection === 'open') {
-                info.status = 'connected';
-                try {
-                    info.sessionStr = await buildSessionString(sessionId);
-                } catch (e) {
-                    info.error = 'Failed to build session string: ' + e.message;
+            sock.ev.on('connection.update', async (update) => {
+                const { connection, qr, lastDisconnect } = update;
+
+                // The 'qr' field means WA's WebSocket handshake is done and the
+                // server is ready. Request pairing code here instead of showing QR.
+                if (qr) await requestCode();
+
+                if (connection === 'open') {
+                    info.status = 'connected';
+                    try {
+                        info.sessionStr = await buildSessionString(sessionId);
+                    } catch (e) {
+                        info.error = 'Session build failed: ' + e.message;
+                    }
+                    sock.end();
                 }
-                sock.end();
-            }
 
-            if (connection === 'close') {
-                const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-                if (statusCode !== DisconnectReason.loggedOut && info.status !== 'connected') {
-                    info.status = 'error';
-                    info.error  = `Connection closed (code ${statusCode})`;
+                if (connection === 'close') {
+                    const code2 = new Boom(lastDisconnect?.error)?.output?.statusCode;
+                    if (code2 !== DisconnectReason.loggedOut && info.status !== 'connected') {
+                        if (!codeRequested) {
+                            // Never even got to request code — connection dropped early
+                            info.status = 'error';
+                            info.error  = `Connection closed before pairing code (code ${code2}). Check the phone number format — it must include country code, e.g. 2348012345678`;
+                        } else if (info.status !== 'code_ready' && info.status !== 'connected') {
+                            info.status = 'error';
+                            info.error  = `Connection closed (code ${code2})`;
+                        }
+                    }
                 }
-            }
-        });
+            });
 
-        sock.ev.on('creds.update', saveCreds);
+            sock.ev.on('creds.update', saveCreds);
 
-    } catch (err) {
-        info.status = 'error';
-        info.error  = err.message;
-    }
+            // Fallback: if 'qr' event hasn't fired after 4s, try anyway.
+            // Some environments / Baileys versions delay or skip the qr event.
+            await new Promise(r => setTimeout(r, 4000));
+            await requestCode();
+
+        } catch (err) {
+            info.status = 'error';
+            info.error  = err.message;
+        }
+    })();
 });
 
 // ─── GET /status/:sessionId ───────────────────────────────────────────────────
