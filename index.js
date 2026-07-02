@@ -135,7 +135,10 @@ app.post('/api/pair', async (req, res) => {
     await socketReady;
 
     const rawCode   = await sock.requestPairingCode(phone);
-    const formatted = rawCode?.replace(/(.{4})(.{4})/, '$1-$2') || rawCode;
+    // Strip any separators (spaces, hyphens) Baileys may include, then
+    // format as XXXX-XXXX so the frontend always receives exactly 8 alphanum chars
+    const clean     = (rawCode || '').replace(/[^A-Z0-9]/gi, '');
+    const formatted = clean.length >= 8 ? clean.slice(0, 4) + '-' + clean.slice(4, 8) : clean;
 
     res.json({ token, code: formatted });
 
