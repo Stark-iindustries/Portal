@@ -1,159 +1,147 @@
 'use strict';
 
-if (!globalThis.crypto) {
-    globalThis.crypto = require('crypto').webcrypto;
-}
-
 const express  = require('express');
 const path     = require('path');
 const fs       = require('fs');
-const pino     = require('pino');
+const os       = require('os');
+const { v4: uuidv4 } = require('uuid');
 const AdmZip   = require('adm-zip');
+const pino     = require('pino');
+const { Boom } = require('@hapi/boom');
 
 const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    makeCacheableSignalKeyStore,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    Browsers,
+  default: makeWASocket,
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  Browsers,
 } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const PUBLIC_DIR  = path.join(__dirname, 'public');
-const SESSION_DIR = path.join(__dirname, 'sessions');
-
 app.use(express.json());
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Active pairing sessions: { id → { status, code, sessionStr, error } }
+// In-memory store: token -> { socket, dir, status, sessionId, timer }
 const sessions = new Map();
+const SESSION_TIMEOUT = 5 * 60 * 1000; // 5 min
 
-// ─── Build session string ─────────────────────────────────────────────────────
-async function buildSessionString(sessionId) {
-    const dir   = path.join(SESSION_DIR, sessionId);
-    const zip   = new AdmZip();
-    for (const f of fs.readdirSync(dir)) zip.addLocalFile(path.join(dir, f));
-    const encoded = zip.toBuffer().toString('base64').replace(/\//g, '*');
-    return `BOTIFY-X=${encoded}`;
+function cleanup(token) {
+  const s = sessions.get(token);
+  if (!s) return;
+  try { s.socket?.end?.(); } catch (_) {}
+  try { s.socket?.ws?.close?.(); } catch (_) {}
+  try {
+    if (s.dir && fs.existsSync(s.dir))
+      fs.rmSync(s.dir, { recursive: true, force: true });
+  } catch (_) {}
+  if (s.timer) clearTimeout(s.timer);
+  sessions.delete(token);
 }
 
-// ─── POST /generate ───────────────────────────────────────────────────────────
-app.post('/generate', async (req, res) => {
-    const { number } = req.body;
-    if (!number || !/^\d{7,15}$/.test(number.replace(/\D/g, ''))) {
-        return res.status(400).json({ error: 'Provide a valid phone number with country code (digits only).' });
-    }
+// POST /api/pair  { phone: "2348012345678" }
+// Returns { token, code: "ABCD-EFGH" }
+app.post('/api/pair', async (req, res) => {
+  let { phone } = req.body || {};
+  if (!phone) return res.status(400).json({ error: 'Phone number is required' });
 
-    const cleanNumber = number.replace(/\D/g, '');
-    const sessionId   = `session_${cleanNumber}_${Date.now()}`;
-    const sessionDir  = path.join(SESSION_DIR, sessionId);
-    fs.mkdirSync(sessionDir, { recursive: true });
+  phone = phone.replace(/[^0-9]/g, '');
+  if (phone.length < 7 || phone.length > 15)
+    return res.status(400).json({ error: 'Invalid phone number format' });
 
-    const info = { status: 'pending', code: null, sessionStr: null, error: null };
-    sessions.set(sessionId, info);
+  const token = uuidv4();
+  const dir   = path.join(os.tmpdir(), `botifyx-${token}`);
+  fs.mkdirSync(dir, { recursive: true });
 
-    // Respond immediately so the client can show the waiting screen and start polling
-    res.json({ sessionId });
+  const entry = { socket: null, dir, status: 'pending', sessionId: null, timer: null };
+  sessions.set(token, entry);
+  entry.timer = setTimeout(() => cleanup(token), SESSION_TIMEOUT);
 
-    // ── Start pairing socket (async) ─────────────────────────────────────────
-    ;(async () => {
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(dir);
+    const { version }          = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      logger: pino({ level: 'silent' }),
+      auth: {
+        creds: state.creds,
+        keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+      },
+      browser:           Browsers.ubuntu('Chrome'),
+      printQRInTerminal: false,
+      syncFullHistory:   false,
+      getMessage:        async () => ({ conversation: '' }),
+    });
+
+    entry.socket = sock;
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect } = update;
+
+      if (connection === 'open') {
         try {
-            const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-            const { version }          = await fetchLatestBaileysVersion();
+          await saveCreds();
+          // Small delay to let creds flush to disk
+          await new Promise(r => setTimeout(r, 1500));
 
-            const sock = makeWASocket({
-                version,
-                logger: pino({ level: 'silent' }),
-                auth: {
-                    creds: state.creds,
-                    keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-                },
-                // Chrome fingerprint — most reliable for triggering WA's notification
-                browser:              Browsers.ubuntu('Chrome'),
-                printQRInTerminal:    false,
-                syncFullHistory:      false,
-                markOnlineOnConnect:  false,
-                getMessage:           async () => ({ conversation: '' }),
-            });
+          const zip   = new AdmZip();
+          const items = fs.readdirSync(dir);
+          for (const item of items) {
+            const full = path.join(dir, item);
+            if (fs.statSync(full).isFile()) zip.addLocalFile(full);
+          }
+          const buf     = zip.toBuffer();
+          // Replace / with * to match Core-botifyX's decoder
+          const encoded = buf.toString('base64').replace(/\//g, '*');
+          const sid     = `BOTIFY-X=${encoded}`;
 
-            let codeRequested = false;
-
-            // Helper: request pairing code and store result
-            const requestCode = async () => {
-                if (codeRequested || sock.authState.creds.registered) return;
-                codeRequested = true;
-                try {
-                    const code      = await sock.requestPairingCode(cleanNumber);
-                    const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
-                    info.code   = formatted;
-                    info.status = 'code_ready';
-                } catch (e) {
-                    if (!codeRequested) return; // already handled
-                    info.status = 'error';
-                    info.error  = 'Pairing code request failed: ' + e.message;
-                }
-            };
-
-            sock.ev.on('connection.update', async (update) => {
-                const { connection, qr, lastDisconnect } = update;
-
-                // The 'qr' field means WA's WebSocket handshake is done and the
-                // server is ready. Request pairing code here instead of showing QR.
-                if (qr) await requestCode();
-
-                if (connection === 'open') {
-                    info.status = 'connected';
-                    try {
-                        info.sessionStr = await buildSessionString(sessionId);
-                    } catch (e) {
-                        info.error = 'Session build failed: ' + e.message;
-                    }
-                    sock.end();
-                }
-
-                if (connection === 'close') {
-                    const code2 = new Boom(lastDisconnect?.error)?.output?.statusCode;
-                    if (code2 !== DisconnectReason.loggedOut && info.status !== 'connected') {
-                        if (!codeRequested) {
-                            // Never even got to request code — connection dropped early
-                            info.status = 'error';
-                            info.error  = `Connection closed before pairing code (code ${code2}). Check the phone number format — it must include country code, e.g. 2348012345678`;
-                        } else if (info.status !== 'code_ready' && info.status !== 'connected') {
-                            info.status = 'error';
-                            info.error  = `Connection closed (code ${code2})`;
-                        }
-                    }
-                }
-            });
-
-            sock.ev.on('creds.update', saveCreds);
-
-            // Fallback: if 'qr' event hasn't fired after 4s, try anyway.
-            // Some environments / Baileys versions delay or skip the qr event.
-            await new Promise(r => setTimeout(r, 4000));
-            await requestCode();
-
+          const e = sessions.get(token);
+          if (e) { e.status = 'connected'; e.sessionId = sid; }
         } catch (err) {
-            info.status = 'error';
-            info.error  = err.message;
+          const e = sessions.get(token);
+          if (e) e.status = 'error';
         }
-    })();
+      }
+
+      if (connection === 'close') {
+        const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+        const e = sessions.get(token);
+        if (e && e.status !== 'connected') e.status = 'error';
+      }
+    });
+
+    // Brief pause before requesting pairing code (Baileys needs to init)
+    await new Promise(r => setTimeout(r, 3000));
+    const rawCode = await sock.requestPairingCode(phone);
+    // Format as XXXX-XXXX
+    const formatted = rawCode?.replace(/(.{4})(.{4})/, '$1-$2') || rawCode;
+
+    res.json({ token, code: formatted });
+
+  } catch (err) {
+    cleanup(token);
+    res.status(500).json({ error: err.message || 'Pairing failed. Check the number and try again.' });
+  }
 });
 
-// ─── GET /status/:sessionId ───────────────────────────────────────────────────
-app.get('/status/:sessionId', (req, res) => {
-    const info = sessions.get(req.params.sessionId);
-    if (!info) return res.status(404).json({ error: 'Session not found.' });
-    res.json(info);
+// GET /api/session/:token — poll until connected or error
+app.get('/api/session/:token', (req, res) => {
+  const s = sessions.get(req.params.token);
+  if (!s) return res.status(404).json({ status: 'expired' });
+
+  if (s.status === 'connected' && s.sessionId) {
+    const sid = s.sessionId;
+    cleanup(req.params.token);
+    return res.json({ status: 'connected', sessionId: sid });
+  }
+
+  res.json({ status: s.status });
 });
 
-// ─── SPA fallback ─────────────────────────────────────────────────────────────
-app.get('*', (_, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-
-app.listen(PORT, () => {
-    console.log(`[BOTIFY-X] Pairing portal running on port ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log(`[BOTIFY-X Portal] Listening on port ${PORT}`)
+);

@@ -3,434 +3,391 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BOTIFY-X | WhatsApp Bot Pairing</title>
+<title>BotifyX — Session Pairing</title>
 <style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
   :root {
-    --green:  #25D366;
-    --green2: #128C7E;
-    --dark:   #0a0e1a;
-    --card:   #111827;
-    --border: #1f2937;
-    --text:   #e5e7eb;
-    --muted:  #6b7280;
-    --accent: #00ff88;
+    --bg:        #0a0a0f;
+    --surface:   #12121a;
+    --card:      #1a1a26;
+    --border:    #2a2a3d;
+    --accent:    #7c5cfc;
+    --accent2:   #5c8afc;
+    --green:     #22c55e;
+    --red:       #ef4444;
+    --yellow:    #f59e0b;
+    --text:      #e8e8f0;
+    --muted:     #8888a8;
+    --radius:    16px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
-    background: var(--dark);
+    background: var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    overflow-x: hidden;
-  }
-
-  .bg-blobs { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-  .blob {
-    position: absolute; border-radius: 50%;
-    filter: blur(80px); opacity: 0.18; animation: float 8s ease-in-out infinite;
-  }
-  .blob-1 { width: 500px; height: 500px; background: #25D366; top: -100px; left: -100px; animation-delay: 0s; }
-  .blob-2 { width: 400px; height: 400px; background: #128C7E; bottom: -80px; right: -80px; animation-delay: -3s; }
-  .blob-3 { width: 300px; height: 300px; background: #00ff88; top: 50%; left: 50%; animation-delay: -5s; }
-  @keyframes float {
-    0%, 100% { transform: translate(0,0) scale(1); }
-    33%       { transform: translate(30px,-20px) scale(1.05); }
-    66%       { transform: translate(-20px,15px) scale(0.95); }
-  }
-
-  .grid-overlay {
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    padding: 24px;
     background-image:
-      linear-gradient(rgba(37,211,102,0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(37,211,102,0.04) 1px, transparent 1px);
-    background-size: 50px 50px;
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124,92,252,0.15), transparent),
+      radial-gradient(ellipse 60% 40% at 80% 80%, rgba(92,138,252,0.08), transparent);
   }
 
-  .container {
-    position: relative; z-index: 1;
-    width: 100%; max-width: 480px;
-    padding: 24px 16px;
-    display: flex; flex-direction: column; align-items: center; gap: 24px;
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 36px;
   }
 
-  .logo-ring {
-    width: 90px; height: 90px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--green), var(--green2));
+  .logo-icon {
+    width: 48px; height: 48px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 40px rgba(37,211,102,0.4);
-    animation: pulse-ring 2.5s ease-in-out infinite;
-    font-size: 44px;
+    font-size: 24px;
+    box-shadow: 0 0 24px rgba(124,92,252,0.4);
   }
-  @keyframes pulse-ring {
-    0%, 100% { box-shadow: 0 0 30px rgba(37,211,102,0.3); }
-    50%       { box-shadow: 0 0 60px rgba(37,211,102,0.6); }
-  }
-  .brand-title {
-    font-size: 2rem; font-weight: 800; letter-spacing: 3px;
-    background: linear-gradient(90deg, var(--green), var(--accent));
+
+  .logo h1 {
+    font-size: 28px; font-weight: 700;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text;
   }
-  .brand-sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 1px; text-align: center; }
+
+  .logo span { font-size: 13px; color: var(--muted); display: block; margin-top: 2px; font-weight: 400; -webkit-text-fill-color: var(--muted); }
 
   .card {
-    width: 100%; background: var(--card);
-    border: 1px solid var(--border); border-radius: 20px;
-    padding: 32px 28px;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
-    animation: slide-up 0.5s ease-out;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 36px;
+    width: 100%;
+    max-width: 480px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.4);
   }
-  @keyframes slide-up {
-    from { opacity: 0; transform: translateY(20px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  .card-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; }
-  .card-desc  { font-size: 0.83rem; color: var(--muted); margin-bottom: 24px; line-height: 1.5; }
 
-  .input-wrap { position: relative; }
-  .input-prefix {
-    position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
-    color: var(--green); font-weight: 700; font-size: 0.95rem; pointer-events: none;
+  .card h2 {
+    font-size: 20px; font-weight: 600; margin-bottom: 8px;
   }
-  input[type="text"] {
-    width: 100%; background: #0d1321;
-    border: 1.5px solid var(--border); border-radius: 12px;
-    padding: 14px 14px 14px 42px;
-    color: var(--text); font-size: 1rem;
-    outline: none; transition: border-color 0.2s;
-  }
-  input[type="text"]:focus { border-color: var(--green); }
-  input[type="text"]::placeholder { color: var(--muted); }
 
-  .btn {
-    width: 100%; margin-top: 16px;
-    background: linear-gradient(135deg, var(--green), var(--green2));
-    color: #fff; font-size: 1rem; font-weight: 700;
-    border: none; border-radius: 12px; padding: 15px;
-    cursor: pointer; transition: opacity 0.2s, transform 0.1s;
-    letter-spacing: 0.5px;
+  .card p.sub {
+    color: var(--muted); font-size: 14px; line-height: 1.6; margin-bottom: 28px;
   }
-  .btn:hover { opacity: 0.9; transform: translateY(-1px); }
-  .btn:active { transform: translateY(0); }
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
-  .steps { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+  .steps {
+    display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px;
+  }
+
   .step {
     display: flex; align-items: flex-start; gap: 12px;
-    background: #0d1321; border-radius: 10px; padding: 12px 14px;
-    font-size: 0.83rem; color: var(--muted);
+    background: var(--surface); border-radius: 10px; padding: 12px 14px;
+    border: 1px solid var(--border);
   }
+
   .step-num {
-    min-width: 24px; height: 24px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--green), var(--green2));
+    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
     display: flex; align-items: center; justify-content: center;
-    font-size: 0.75rem; font-weight: 700; color: #fff; flex-shrink: 0;
+    font-size: 12px; font-weight: 700;
   }
 
-  .screen { display: none; }
-  .screen.active { display: flex; flex-direction: column; }
+  .step p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .step p strong { color: var(--text); }
 
+  label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; color: var(--muted); }
+
+  .input-row { display: flex; gap: 10px; }
+
+  input[type="text"] {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 15px;
+    padding: 13px 16px;
+    outline: none;
+    transition: border-color .2s;
+  }
+
+  input[type="text"]:focus { border-color: var(--accent); }
+  input[type="text"]::placeholder { color: var(--muted); }
+
+  button {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+    border: none; border-radius: 10px;
+    padding: 13px 20px;
+    font-size: 14px; font-weight: 600;
+    cursor: pointer;
+    transition: opacity .2s, transform .1s;
+    white-space: nowrap;
+  }
+
+  button:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
+  button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+  /* Code display */
   .code-box {
-    background: #0d1321; border: 1.5px solid var(--green);
-    border-radius: 14px; padding: 22px;
-    text-align: center; margin: 16px 0;
+    display: none;
+    margin-top: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
   }
-  .code-value {
-    font-size: 2.2rem; font-weight: 900; letter-spacing: 8px;
-    background: linear-gradient(90deg, var(--green), var(--accent));
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text; min-height: 3rem; display: flex;
-    align-items: center; justify-content: center;
-  }
-  .code-timer { color: var(--muted); font-size: 0.8rem; margin-top: 6px; }
 
-  .session-wrap { position: relative; margin: 16px 0; }
-  .session-box {
-    background: #0d1321; border: 1.5px solid var(--green);
-    border-radius: 12px; padding: 16px;
-    font-size: 0.72rem; font-family: monospace;
-    color: var(--accent); word-break: break-all;
-    max-height: 120px; overflow-y: auto; line-height: 1.5;
+  .code-box.show { display: block; }
+
+  .code-label { font-size: 12px; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .08em; }
+
+  .code-value {
+    font-size: 36px; font-weight: 700; letter-spacing: 6px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-family: 'Courier New', monospace;
   }
-  .copy-btn {
-    position: absolute; top: 10px; right: 10px;
-    background: var(--green2); color: #fff;
-    border: none; border-radius: 8px; padding: 5px 12px;
-    font-size: 0.75rem; cursor: pointer; font-weight: 600;
-    transition: background 0.2s;
+
+  .code-hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+  /* Status bar */
+  .status-bar {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    gap: 10px;
+    align-items: center;
   }
-  .copy-btn:hover { background: var(--green); }
-  .copy-btn.copied { background: #059669; }
+
+  .status-bar.show { display: flex; }
+  .status-bar.waiting  { background: rgba(245,158,11,.1);  border: 1px solid rgba(245,158,11,.3); color: var(--yellow); }
+  .status-bar.success  { background: rgba(34,197,94,.1);   border: 1px solid rgba(34,197,94,.3);  color: var(--green);  }
+  .status-bar.error    { background: rgba(239,68,68,.1);   border: 1px solid rgba(239,68,68,.3);  color: var(--red);    }
 
   .spinner {
-    width: 36px; height: 36px; margin: 12px auto;
-    border: 4px solid var(--border);
-    border-top-color: var(--green);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    width: 16px; height: 16px; border: 2px solid currentColor;
+    border-top-color: transparent; border-radius: 50%;
+    animation: spin .7s linear infinite; flex-shrink: 0;
   }
+
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .alert {
-    border-radius: 10px; padding: 12px 16px;
-    font-size: 0.83rem; margin-top: 12px; display: none;
+  /* Session ID result */
+  .result-box {
+    display: none;
+    margin-top: 20px;
+    background: var(--surface);
+    border: 1px solid var(--green);
+    border-radius: 12px;
+    padding: 20px;
   }
-  .alert.error   { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; }
-  .alert.success { background: rgba(37,211,102,0.10); border: 1px solid rgba(37,211,102,0.3); color: #6ee7b7; }
-  .alert.info    { background: rgba(59,130,246,0.10); border: 1px solid rgba(59,130,246,0.3); color: #93c5fd; }
-  .alert.show    { display: block; }
 
-  .footer { color: var(--muted); font-size: 0.75rem; text-align: center; line-height: 1.8; }
-  .footer a { color: var(--green); text-decoration: none; }
-  .footer a:hover { text-decoration: underline; }
+  .result-box.show { display: block; }
+  .result-box .result-label { font-size: 12px; color: var(--green); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
 
-  /* Dot loading animation for "waiting for code" */
-  .dots::after {
-    content: '';
-    animation: dots 1.5s steps(4, end) infinite;
+  .result-id {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    word-break: break-all;
+    line-height: 1.4;
+    max-height: 120px;
+    overflow-y: auto;
   }
-  @keyframes dots {
-    0%   { content: ''; }
-    25%  { content: '.'; }
-    50%  { content: '..'; }
-    75%  { content: '...'; }
-    100% { content: ''; }
+
+  .copy-btn {
+    margin-top: 12px;
+    width: 100%;
+    background: linear-gradient(135deg, var(--green), #16a34a);
+    font-size: 13px;
   }
+
+  .copy-btn.copied { background: var(--surface); color: var(--green); border: 1px solid var(--green); }
+
+  .result-hint { font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+
+  .footer { margin-top: 32px; font-size: 12px; color: var(--muted); text-align: center; }
+  .footer a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
 
-<div class="bg-blobs">
-  <div class="blob blob-1"></div>
-  <div class="blob blob-2"></div>
-  <div class="blob blob-3"></div>
+<div class="logo">
+  <div class="logo-icon">⚡</div>
+  <div>
+    <h1>BotifyX</h1>
+    <span>Session Pairing Portal</span>
+  </div>
 </div>
-<div class="grid-overlay"></div>
 
-<div class="container">
+<div class="card">
+  <h2>Pair Your WhatsApp Number</h2>
+  <p class="sub">Generate a <code style="color:var(--accent);background:var(--surface);padding:2px 6px;border-radius:4px;font-size:12px;">BOTIFY-X=</code> session ID to connect your bot.</p>
 
-  <!-- Header -->
-  <div style="text-align:center; display:flex; flex-direction:column; align-items:center; gap:12px;">
-    <div class="logo-ring">🤖</div>
-    <div class="brand-title">BOTIFY-X</div>
-    <div class="brand-sub">WhatsApp Bot Session Generator</div>
-  </div>
-
-  <!-- SCREEN 1: Enter Number -->
-  <div class="card screen active" id="screen-input">
-    <div class="card-title">📱 Enter Your Phone Number</div>
-    <div class="card-desc">Enter the WhatsApp number you want to link. Include your country code without the + sign.</div>
-
-    <div class="input-wrap">
-      <div class="input-prefix">+</div>
-      <input type="text" id="phone-input" placeholder="234 812 345 6789" inputmode="numeric" />
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <p>Enter your WhatsApp number below with <strong>country code</strong> (e.g. 2348012345678)</p>
     </div>
-
-    <button class="btn" id="generate-btn" onclick="generateCode()">Generate Pairing Code</button>
-    <div class="alert error" id="input-error"></div>
-
-    <div class="steps">
-      <div class="step">
-        <div class="step-num">1</div>
-        <span>Enter your WhatsApp number with country code (e.g. <strong>2348012345678</strong>)</span>
-      </div>
-      <div class="step">
-        <div class="step-num">2</div>
-        <span>Enter the code in WhatsApp → <strong>Settings → Linked Devices → Link with Phone Number</strong></span>
-      </div>
-      <div class="step">
-        <div class="step-num">3</div>
-        <span>After linking, copy your <strong>BOTIFY-X session string</strong> and set it as <code>SESSION_ID</code></span>
-      </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <p>Open WhatsApp → <strong>Linked Devices</strong> → <strong>Link with phone number</strong> → enter the code shown</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <p>Copy your <strong>BOTIFY-X= session ID</strong> and paste it into your bot's <code style="color:var(--accent);font-size:11px;">SESSION_ID</code> variable</p>
     </div>
   </div>
 
-  <!-- SCREEN 2: Pairing Code -->
-  <div class="card screen" id="screen-code">
-    <div class="card-title">🔑 Your Pairing Code</div>
-    <div class="card-desc" id="code-desc">
-      Enter this code in WhatsApp → <strong>Settings → Linked Devices → Link with Phone Number</strong>. Code expires in 2 minutes.
-    </div>
-
-    <div class="code-box">
-      <div class="code-value" id="code-display">
-        <!-- shows spinner or code -->
-        <span id="code-text" class="dots" style="font-size:1rem; font-weight:400; letter-spacing:2px; -webkit-text-fill-color: var(--muted);">Generating code</span>
-      </div>
-      <div class="code-timer" id="code-timer">⏳ Waiting for WhatsApp to issue code…</div>
-    </div>
-
-    <div class="spinner" id="code-spinner"></div>
-    <div class="alert" id="code-status"></div>
-
-    <button class="btn" onclick="resetAll()" style="margin-top:8px; background:#374151;">← Start Over</button>
+  <label for="phone">WhatsApp Number (with country code, no + or spaces)</label>
+  <div class="input-row">
+    <input type="text" id="phone" placeholder="e.g. 2348012345678" maxlength="15" />
+    <button id="pairBtn" onclick="startPairing()">Get Code</button>
   </div>
 
-  <!-- SCREEN 3: Session Ready -->
-  <div class="card screen" id="screen-session">
-    <div class="card-title">✅ Session Generated!</div>
-    <div class="card-desc">
-      Your <strong>BOTIFY-X session string</strong> is ready. Copy it and set it as your <code>SESSION_ID</code> environment variable.
-    </div>
-
-    <div class="session-wrap">
-      <div class="session-box" id="session-display"></div>
-      <button class="copy-btn" id="copy-btn" onclick="copySession()">Copy</button>
-    </div>
-
-    <div class="alert success show" style="margin-bottom:0">
-      🎉 Set <code>SESSION_ID</code> to the string above in your environment variables, then start BOTIFY-X!
-    </div>
-
-    <button class="btn" onclick="resetAll()" style="margin-top:16px; background:#374151;">🔄 Generate Another</button>
+  <div class="code-box" id="codeBox">
+    <div class="code-label">Enter this code in WhatsApp → Linked Devices → Link with phone number</div>
+    <div class="code-value" id="codeValue">----</div>
+    <div class="code-hint">Open WhatsApp on your phone · Tap ⋮ More options · Linked Devices · Link a Device · Link with phone number</div>
   </div>
 
-  <!-- Footer -->
-  <div class="footer">
-    BOTIFY-X by <strong>Mr Stark</strong><br>
-    <a href="https://t.me/botifyxspace" target="_blank">Telegram Channel</a> ·
-    <a href="https://t.me/+yxIy3nwj6Ig4YjM0" target="_blank">Support Group</a> ·
-    <a href="https://whatsapp.com/channel/0029VbCgsEh5a23yTg0FnW2O" target="_blank">WhatsApp Channel</a>
+  <div class="status-bar waiting" id="statusBar">
+    <div class="spinner"></div>
+    <span id="statusText">Waiting for you to enter the code in WhatsApp…</span>
   </div>
 
+  <div class="result-box" id="resultBox">
+    <div class="result-label">✅ Session ID Ready — Copy and save this!</div>
+    <div class="result-id" id="sessionId"></div>
+    <button class="copy-btn" id="copyBtn" onclick="copySession()">Copy Session ID</button>
+    <p class="result-hint">Paste this as your <strong>SESSION_ID</strong> environment variable on Railway, Heroku, Render, or wherever you host your bot. Keep it private.</p>
+  </div>
 </div>
+
+<p class="footer">Powered by BotifyX &nbsp;·&nbsp; <a href="https://github.com/Stark-iindustries" target="_blank">Stark-industries</a></p>
 
 <script>
-let currentSessionId = null;
-let pollInterval     = null;
-let sessionStr       = '';
-let codeShown        = false;
+let currentToken = null;
+let pollInterval = null;
 
-function showScreen(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-}
-
-function showAlert(id, type, msg) {
-  const el = document.getElementById(id);
-  el.className = `alert ${type} show`;
-  el.textContent = msg;
-}
-
-function hideAlert(id) {
-  document.getElementById(id).className = 'alert';
-}
-
-async function generateCode() {
-  const raw   = document.getElementById('phone-input').value.replace(/\D/g, '');
-  const btn   = document.getElementById('generate-btn');
-  hideAlert('input-error');
-
-  if (!raw || raw.length < 7) {
-    showAlert('input-error', 'error', '❌ Enter a valid phone number with country code.');
+async function startPairing() {
+  const phone = document.getElementById('phone').value.trim().replace(/[^0-9]/g, '');
+  if (!phone || phone.length < 7) {
+    alert('Please enter a valid WhatsApp number with country code.');
     return;
   }
 
-  btn.disabled    = true;
+  const btn = document.getElementById('pairBtn');
+  btn.disabled = true;
   btn.textContent = 'Connecting…';
 
-  try {
-    const resp = await fetch('/generate', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ number: raw }),
-    });
-    const data = await resp.json();
+  hide('codeBox'); hide('resultBox');
+  setStatus('waiting', '⏳ Connecting to WhatsApp… please wait (up to 10s)');
 
-    if (!resp.ok || data.error) {
-      showAlert('input-error', 'error', '❌ ' + (data.error || 'Failed to start pairing.'));
-      btn.disabled    = false;
-      btn.textContent = 'Generate Pairing Code';
-      return;
+  try {
+    const res  = await fetch('/api/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.code) {
+      throw new Error(data.error || 'Failed to get pairing code');
     }
 
-    currentSessionId = data.sessionId;
-    codeShown        = false;
+    currentToken = data.token;
+    document.getElementById('codeValue').textContent = data.code;
+    show('codeBox');
+    setStatus('waiting', '⏳ Waiting for you to enter the code in WhatsApp…');
 
-    // Reset code screen to loading state
-    document.getElementById('code-text').className = 'dots';
-    document.getElementById('code-text').style     = 'font-size:1rem; font-weight:400; letter-spacing:2px; -webkit-text-fill-color: var(--muted);';
-    document.getElementById('code-text').textContent = 'Generating code';
-    document.getElementById('code-timer').textContent = '⏳ Waiting for WhatsApp to issue code…';
-    document.getElementById('code-spinner').style.display = '';
-    hideAlert('code-status');
-
-    showScreen('screen-code');
+    btn.textContent = 'Waiting…';
     startPolling();
 
-  } catch (e) {
-    showAlert('input-error', 'error', '❌ Network error: ' + e.message);
-    btn.disabled    = false;
-    btn.textContent = 'Generate Pairing Code';
+  } catch (err) {
+    setStatus('error', '❌ ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Get Code';
   }
 }
 
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(pollStatus, 2000);
+  pollInterval = setInterval(pollStatus, 3000);
 }
 
 async function pollStatus() {
-  if (!currentSessionId) return;
+  if (!currentToken) return;
   try {
-    const resp = await fetch('/status/' + currentSessionId);
-    const data = await resp.json();
+    const res  = await fetch('/api/session/' + currentToken);
+    const data = await res.json();
 
-    // Show code as soon as it arrives (status: code_ready or paired_pending)
-    if (data.code && !codeShown) {
-      codeShown = true;
-      const codeEl  = document.getElementById('code-text');
-      codeEl.className   = '';
-      codeEl.style       = '';
-      codeEl.textContent = data.code;
-      document.getElementById('code-timer').textContent =
-        '⏳ Now enter this in WhatsApp → Linked Devices → Link with Phone Number';
-      // WhatsApp notification should appear on the phone now
-      showAlert('code-status', 'info',
-        '📲 Check your WhatsApp — you should get a "Link a device" notification.');
-    }
-
-    if (data.status === 'connected' && data.sessionStr) {
+    if (data.status === 'connected' && data.sessionId) {
       clearInterval(pollInterval);
-      sessionStr = data.sessionStr;
-      document.getElementById('session-display').textContent = sessionStr;
-      showScreen('screen-session');
+      document.getElementById('sessionId').textContent = data.sessionId;
+      setStatus('success', '✅ Paired successfully! Your session ID is ready.');
+      show('resultBox');
+      hide('codeBox');
+      const btn = document.getElementById('pairBtn');
+      btn.disabled = false; btn.textContent = 'Pair Another';
+      currentToken = null;
 
     } else if (data.status === 'error') {
       clearInterval(pollInterval);
-      document.getElementById('code-spinner').style.display = 'none';
-      showAlert('code-status', 'error', '❌ ' + (data.error || 'Pairing failed. Try again.'));
+      setStatus('error', '❌ Pairing failed. The code may have expired. Try again.');
+      const btn = document.getElementById('pairBtn');
+      btn.disabled = false; btn.textContent = 'Try Again';
+
+    } else if (data.status === 'expired') {
+      clearInterval(pollInterval);
+      setStatus('error', '❌ Session expired. Please start over.');
+      const btn = document.getElementById('pairBtn');
+      btn.disabled = false; btn.textContent = 'Get Code';
     }
   } catch (_) {}
 }
 
-function copySession() {
-  if (!sessionStr) return;
-  navigator.clipboard.writeText(sessionStr).then(() => {
-    const btn = document.getElementById('copy-btn');
-    btn.textContent = '✓ Copied!';
+async function copySession() {
+  const text = document.getElementById('sessionId').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '✅ Copied!';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-  });
+    setTimeout(() => { btn.textContent = 'Copy Session ID'; btn.classList.remove('copied'); }, 2000);
+  } catch (_) {
+    alert('Copy failed. Please select and copy manually.');
+  }
 }
 
-function resetAll() {
-  if (pollInterval) clearInterval(pollInterval);
-  currentSessionId = null; sessionStr = ''; codeShown = false;
-  document.getElementById('phone-input').value = '';
-  document.getElementById('generate-btn').disabled    = false;
-  document.getElementById('generate-btn').textContent = 'Generate Pairing Code';
-  hideAlert('code-status');
-  hideAlert('input-error');
-  showScreen('screen-input');
+function setStatus(type, text) {
+  const bar = document.getElementById('statusBar');
+  bar.className = 'status-bar show ' + type;
+  const spinner = type === 'waiting' ? '<div class="spinner"></div>' : '';
+  document.getElementById('statusText').innerHTML = text;
+  bar.innerHTML = spinner + '<span>' + text + '</span>';
 }
 
-document.getElementById('phone-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') generateCode();
+function show(id) { document.getElementById(id).classList.add('show'); }
+function hide(id) { document.getElementById(id).classList.remove('show'); }
+
+document.getElementById('phone').addEventListener('keydown', e => {
+  if (e.key === 'Enter') startPairing();
 });
 </script>
 </body>
