@@ -71,7 +71,7 @@ app.post('/api/pair', async (req, res) => {
       },
       // FIX: Use baileys Desktop browser — Ubuntu/Chrome causes WhatsApp to
       // reject the pairing code handshake with "something went wrong"
-      browser:                   ['BotifyX', 'Desktop', '3.0'],
+      browser:                   Browsers.ubuntu('Chrome'),
       printQRInTerminal:         false,
       syncFullHistory:           false,
       connectTimeoutMs:          60_000,
