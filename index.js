@@ -84,7 +84,7 @@ app.post('/api/pair', async (req, res) => {
         reject(new Error('Connection timeout — WhatsApp servers unreachable')), 25_000);
 
       sock.ev.on('connection.update', async (update) => {
-        const { connection, qr } = update;
+        const { connection, qr, lastDisconnect } = update;
 
         if (qr) { clearTimeout(timeout); resolve(); }
 
@@ -107,8 +107,18 @@ app.post('/api/pair', async (req, res) => {
         }
 
         if (connection === 'close') {
-          const e = sessions.get(token);
-          if (e && e.status !== 'connected') e.status = 'error';
+          // Only mark error on permanent disconnects (loggedOut, badSession).
+          // Baileys may emit close→reconnect cycles internally; marking error
+          // on every close kills sessions during normal reconnect behaviour.
+          const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+          const permanent =
+            code === DisconnectReason.loggedOut ||
+            code === DisconnectReason.badSession ||
+            code === DisconnectReason.forbidden;
+          if (permanent) {
+            const e = sessions.get(token);
+            if (e && e.status !== 'connected') e.status = 'error';
+          }
         }
       });
     });

@@ -134,6 +134,18 @@ input[type=text]::placeholder{color:var(--muted)}
   border-radius:10px;display:flex;align-items:center;justify-content:center;
   font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700;color:#e0d7ff;
 }
+/* Shrink boxes on narrow phones so all 8 chars are always visible */
+@media(max-width:440px){
+  .code-char{width:36px;height:46px;font-size:20px}
+  .code-group{gap:4px}
+  .code-display{gap:8px;padding:16px 12px}
+}
+@media(max-width:360px){
+  .code-char{width:30px;height:40px;font-size:17px;border-radius:8px}
+  .code-group{gap:3px}
+  .code-display{gap:6px;padding:14px 10px}
+  .code-sep{font-size:16px}
+}
 .code-char.filled{
   background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.5);
   animation:pop-in .25s cubic-bezier(.34,1.56,.64,1) both;
