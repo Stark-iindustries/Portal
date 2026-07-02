@@ -23,34 +23,34 @@ const { Boom } = require('@hapi/boom');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── Paths ────────────────────────────────────────────────────────────────────
 const PUBLIC_DIR  = path.join(__dirname, 'public');
 const SESSION_DIR = path.join(__dirname, 'sessions');
 
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
-// Active pairing sessions: { id → { socket, status, code, sessionStr } }
+// Active pairing sessions: { id → { status, code, sessionStr, error } }
 const sessions = new Map();
 
-// ─── Helper: create session string from session folder ────────────────────────
+// ─── Build session string from session folder ─────────────────────────────────
 async function buildSessionString(sessionId) {
-    const dir = path.join(SESSION_DIR, sessionId);
-    const zip = new AdmZip();
+    const dir   = path.join(SESSION_DIR, sessionId);
+    const zip   = new AdmZip();
     const files = fs.readdirSync(dir);
-    for (const f of files) {
-        zip.addLocalFile(path.join(dir, f));
-    }
+    for (const f of files) zip.addLocalFile(path.join(dir, f));
     const buf     = zip.toBuffer();
     const encoded = buf.toString('base64').replace(/\//g, '*');
     return `BOTIFY-X=${encoded}`;
 }
 
-// ─── POST /generate — start pairing session ───────────────────────────────────
+// ─── POST /generate ───────────────────────────────────────────────────────────
+// Starts the Baileys socket, requests pairing code when the WA WebSocket is
+// ready (on the 'qr' event), and responds immediately with sessionId so the
+// client can poll /status for the code + final session string.
 app.post('/generate', async (req, res) => {
     const { number } = req.body;
     if (!number || !/^\d{7,15}$/.test(number.replace(/\D/g, ''))) {
-        return res.status(400).json({ error: 'Provide a valid phone number (digits only, 7-15 chars).' });
+        return res.status(400).json({ error: 'Provide a valid phone number with country code (digits only).' });
     }
 
     const cleanNumber = number.replace(/\D/g, '');
@@ -62,6 +62,10 @@ app.post('/generate', async (req, res) => {
     const info = { status: 'pending', code: null, sessionStr: null, error: null };
     sessions.set(sessionId, info);
 
+    // Respond immediately — client will poll /status for code + result
+    res.json({ sessionId });
+
+    // ── Start socket (async, does not block the response) ────────────────────
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
         const { version }          = await fetchLatestBaileysVersion();
@@ -71,23 +75,36 @@ app.post('/generate', async (req, res) => {
             logger: pino({ level: 'silent' }),
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+                keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
             },
-            browser: Browsers.ubuntu('Edge'),
+            // Chrome fingerprint — triggers WA notification reliably
+            browser:           Browsers.ubuntu('Chrome'),
             printQRInTerminal: false,
+            syncFullHistory:   false,
+            getMessage:        async () => ({ conversation: '' }),
         });
 
-        // Request pairing code
-        await new Promise(r => setTimeout(r, 1500));
-        const code = await sock.requestPairingCode(cleanNumber);
-        const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
-        info.code   = formatted;
-        info.status = 'paired_pending';
-
-        sock.ev.on('creds.update', saveCreds);
+        let codeRequested = false;
 
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, qr, lastDisconnect } = update;
+
+            // 'qr' fires when the WA WebSocket handshake is complete and the
+            // server is waiting for QR or pairing. This is the correct moment
+            // to call requestPairingCode — NOT after an arbitrary timeout.
+            if (qr && !codeRequested && !sock.authState.creds.registered) {
+                codeRequested = true;
+                try {
+                    const code      = await sock.requestPairingCode(cleanNumber);
+                    const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
+                    info.code   = formatted;
+                    info.status = 'code_ready';
+                } catch (e) {
+                    info.status = 'error';
+                    info.error  = 'Failed to get pairing code: ' + e.message;
+                }
+            }
+
             if (connection === 'open') {
                 info.status = 'connected';
                 try {
@@ -97,32 +114,32 @@ app.post('/generate', async (req, res) => {
                 }
                 sock.end();
             }
+
             if (connection === 'close') {
-                const code2 = new Boom(lastDisconnect?.error)?.output?.statusCode;
-                if (code2 !== DisconnectReason.loggedOut && info.status !== 'connected') {
+                const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+                if (statusCode !== DisconnectReason.loggedOut && info.status !== 'connected') {
                     info.status = 'error';
-                    info.error  = `Connection closed (code ${code2})`;
+                    info.error  = `Connection closed (code ${statusCode})`;
                 }
             }
         });
 
-        res.json({ sessionId, code: formatted });
+        sock.ev.on('creds.update', saveCreds);
 
     } catch (err) {
         info.status = 'error';
         info.error  = err.message;
-        res.status(500).json({ error: err.message });
     }
 });
 
-// ─── GET /status/:sessionId — poll for connection result ──────────────────────
+// ─── GET /status/:sessionId ───────────────────────────────────────────────────
 app.get('/status/:sessionId', (req, res) => {
     const info = sessions.get(req.params.sessionId);
     if (!info) return res.status(404).json({ error: 'Session not found.' });
     res.json(info);
 });
 
-// ─── Serve SPA for all other routes ──────────────────────────────────────────
+// ─── SPA fallback ─────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 app.listen(PORT, () => {
