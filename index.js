@@ -1,18 +1,16 @@
 'use strict';
 
-const express  = require('express');
-const path     = require('path');
-const fs       = require('fs');
-const os       = require('os');
+const express = require('express');
+const path    = require('path');
+const fs      = require('fs');
+const os      = require('os');
 const { v4: uuidv4 } = require('uuid');
-const AdmZip   = require('adm-zip');
-const pino     = require('pino');
+const AdmZip  = require('adm-zip');
 const { Boom } = require('@hapi/boom');
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
   DisconnectReason,
   fetchLatestBaileysVersion,
   Browsers,
@@ -24,14 +22,21 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const sessions = new Map();
+// Completely silent logger — same pattern as the working reference portal
+const SILENT = {
+  level: 'silent',
+  trace: ()=>{}, debug: ()=>{}, info: ()=>{},
+  warn:  ()=>{}, error: ()=>{}, fatal: ()=>{},
+  child: function () { return this; },
+};
+
+const sessions       = new Map();
 const SESSION_TIMEOUT = 5 * 60 * 1000;
 
 function cleanup(token) {
   const s = sessions.get(token);
   if (!s) return;
-  try { s.socket?.end?.(); }       catch (_) {}
-  try { s.socket?.ws?.close?.(); } catch (_) {}
+  try { s.socket?.end?.(undefined); } catch (_) {}
   try {
     if (s.dir && fs.existsSync(s.dir))
       fs.rmSync(s.dir, { recursive: true, force: true });
@@ -40,6 +45,84 @@ function cleanup(token) {
   sessions.delete(token);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// startSocket — extracted into its own function so it can be called
+// recursively to RECONNECT on temporary disconnects (the critical fix from
+// the reference portal that prevents "pairing failed" errors mid-session).
+// ─────────────────────────────────────────────────────────────────────────────
+async function startSocket(session) {
+  const { state, saveCreds } = await useMultiFileAuthState(session.dir);
+  const { version }          = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    auth:    state,        // direct auth — no makeCacheableSignalKeyStore
+    browser: Browsers.ubuntu('Chrome'),
+    logger:  SILENT,
+    printQRInTerminal:              false,
+    getMessage:                     async () => undefined,
+    syncFullHistory:                false,
+    fireInitQueries:                false,   // ← was missing, helps stability
+    generateHighQualityLinkPreview: false,   // ← was missing
+    markOnlineOnConnect:            false,   // ← was missing
+  });
+
+  session.socket = sock;
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    // qr fires when socket is fully registered with WA and ready for pairing
+    if (qr && session.resolveQr) {
+      const resolve    = session.resolveQr;
+      session.resolveQr = null;
+      resolve();
+    }
+
+    if (connection === 'open') {
+      try {
+        await saveCreds();
+        await new Promise(r => setTimeout(r, 1500));
+
+        const zip = new AdmZip();
+        for (const item of fs.readdirSync(session.dir)) {
+          const full = path.join(session.dir, item);
+          if (fs.statSync(full).isFile()) zip.addLocalFile(full);
+        }
+        const encoded = zip.toBuffer().toString('base64').replace(/\//g, '*');
+        const s = sessions.get(session.token);
+        if (s) { s.status = 'connected'; s.sessionId = `BOTIFY-X=${encoded}`; }
+      } catch (_) {
+        const s = sessions.get(session.token);
+        if (s && s.status !== 'connected') s.status = 'error';
+      }
+    }
+
+    if (connection === 'close') {
+      const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const s      = sessions.get(session.token);
+      if (!s || s.status === 'connected') return;
+
+      if (reason !== DisconnectReason.loggedOut) {
+        // ── KEY FIX ────────────────────────────────────────────────────────
+        // Temporary disconnect (network blip, keep-alive timeout, etc).
+        // Reconnect so the socket stays alive while the user enters the code.
+        // Old portal does exactly this — it's why it never shows "failed".
+        // ──────────────────────────────────────────────────────────────────
+        startSocket(session).catch(() => {
+          const s = sessions.get(session.token);
+          if (s && s.status !== 'connected') s.status = 'error';
+        });
+      } else {
+        // loggedOut = permanent — no point reconnecting
+        if (s) s.status = 'error';
+      }
+    }
+  });
+}
+
+// POST /api/pair  { phone }  →  { token, code }
 app.post('/api/pair', async (req, res) => {
   let { phone } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'Phone number is required' });
@@ -52,82 +135,37 @@ app.post('/api/pair', async (req, res) => {
   const dir   = path.join(os.tmpdir(), `botifyx-${token}`);
   fs.mkdirSync(dir, { recursive: true });
 
-  const entry = { socket: null, dir, status: 'pending', sessionId: null, timer: null };
-  sessions.set(token, entry);
-  entry.timer = setTimeout(() => cleanup(token), SESSION_TIMEOUT);
+  const session = {
+    token, dir,
+    status:     'pending',
+    sessionId:  null,
+    socket:     null,
+    resolveQr:  null,
+    timer:      null,
+  };
+  sessions.set(token, session);
+  session.timer = setTimeout(() => cleanup(token), SESSION_TIMEOUT);
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(dir);
-    const { version }          = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-      version,
-      logger:              pino({ level: 'silent' }),
-      auth: {
-        creds: state.creds,
-        keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-      },
-      browser:             Browsers.ubuntu('Chrome'),
-      printQRInTerminal:   false,
-      syncFullHistory:     false,
-      connectTimeoutMs:    60_000,
-      keepAliveIntervalMs: 10_000,
-      defaultQueryTimeoutMs: 30_000,
-      getMessage:          async () => ({ conversation: '' }),
+    // Set up the qr-ready promise BEFORE starting socket so we never miss it
+    const qrReady = new Promise((resolve, reject) => {
+      session.resolveQr = resolve;
+      setTimeout(
+        () => reject(new Error('Connection timeout — WhatsApp servers unreachable')),
+        25_000
+      );
     });
 
-    entry.socket = sock;
-    sock.ev.on('creds.update', saveCreds);
-
-    const socketReady = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() =>
-        reject(new Error('Connection timeout — WhatsApp servers unreachable')), 25_000);
-
-      sock.ev.on('connection.update', async (update) => {
-        const { connection, qr, lastDisconnect } = update;
-
-        if (qr) { clearTimeout(timeout); resolve(); }
-
-        if (connection === 'open') {
-          try {
-            await saveCreds();
-            await new Promise(r => setTimeout(r, 1500));
-            const zip   = new AdmZip();
-            for (const item of fs.readdirSync(dir)) {
-              const full = path.join(dir, item);
-              if (fs.statSync(full).isFile()) zip.addLocalFile(full);
-            }
-            const encoded = zip.toBuffer().toString('base64').replace(/\//g, '*');
-            const e = sessions.get(token);
-            if (e) { e.status = 'connected'; e.sessionId = `BOTIFY-X=${encoded}`; }
-          } catch (_) {
-            const e = sessions.get(token);
-            if (e) e.status = 'error';
-          }
-        }
-
-        if (connection === 'close') {
-          // Only mark error on permanent disconnects (loggedOut, badSession).
-          // Baileys may emit close→reconnect cycles internally; marking error
-          // on every close kills sessions during normal reconnect behaviour.
-          const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-          const permanent =
-            code === DisconnectReason.loggedOut ||
-            code === DisconnectReason.badSession ||
-            code === DisconnectReason.forbidden;
-          if (permanent) {
-            const e = sessions.get(token);
-            if (e && e.status !== 'connected') e.status = 'error';
-          }
-        }
-      });
+    // Start socket in background; it will call resolveQr when ready
+    startSocket(session).catch((err) => {
+      const s = sessions.get(token);
+      if (s && s.status !== 'connected') s.status = 'error';
     });
 
-    await socketReady;
+    await qrReady;
 
-    const rawCode = await sock.requestPairingCode(phone);
-    // Strip ALL separators — send pure alphanumeric chars to the frontend
-    const code = (rawCode || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const rawCode = await session.socket.requestPairingCode(phone);
+    const code    = (rawCode || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
 
     res.json({ token, code });
 
@@ -137,6 +175,7 @@ app.post('/api/pair', async (req, res) => {
   }
 });
 
+// GET /api/session/:token
 app.get('/api/session/:token', (req, res) => {
   const s = sessions.get(req.params.token);
   if (!s) return res.status(404).json({ status: 'expired' });
