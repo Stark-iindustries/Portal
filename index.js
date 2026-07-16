@@ -93,11 +93,7 @@ async function startSocket(session) {
 
         // ── Send session ID to the user's own WhatsApp ────────────────────
         const userJid = session.phone + '@s.whatsapp.net';
-        await sock.sendMessage(userJid, {
-          text: '\u2705 *Your BotifyX Session ID is ready!*\n\n'
-              + sessionId + '\n\n'
-              + '_Copy the entire line above and paste it as your SESSION_ID._'
-        }).catch(() => {});
+        await sock.sendMessage(userJid, { text: sessionId }).catch(() => {});
 
         // ── Auto-follow the BotifyX WhatsApp channel ──────────────────────
         await sock.newsletterFollow(CHANNEL_JID).catch(() => {});
