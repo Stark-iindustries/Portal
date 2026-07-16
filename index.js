@@ -29,8 +29,8 @@ const SILENT = {
   child: function () { return this; },
 };
 
-const CHANNEL_JID    = '0029VbCgsEh5a23yTg0FnW2O@newsletter';
-const sessions       = new Map();
+const CHANNEL_JID     = '0029VbCgsEh5a23yTg0FnW2O@newsletter';
+const sessions        = new Map();
 const SESSION_TIMEOUT = 5 * 60 * 1000;
 
 function cleanup(token) {
@@ -69,7 +69,7 @@ async function startSocket(session) {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr && session.resolveQr) {
-      const resolve    = session.resolveQr;
+      const resolve     = session.resolveQr;
       session.resolveQr = null;
       resolve();
     }
@@ -84,18 +84,19 @@ async function startSocket(session) {
           const full = path.join(session.dir, item);
           if (fs.statSync(full).isFile()) zip.addLocalFile(full);
         }
-        const encoded   = zip.toBuffer().toString('base64').replace(///g, '*');
-        const sessionId = `BOTIFY-X=${encoded}`;
+
+        const encoded   = zip.toBuffer().toString('base64').replace(/\//g, '*');
+        const sessionId = 'BOTIFY-X=' + encoded;
 
         const s = sessions.get(session.token);
         if (s) { s.status = 'connected'; s.sessionId = sessionId; }
 
         // ── Send session ID to the user's own WhatsApp ────────────────────
-        const userJid = `${session.phone}@s.whatsapp.net`;
+        const userJid = session.phone + '@s.whatsapp.net';
         await sock.sendMessage(userJid, {
-          text: `✅ *Your BotifyX Session ID is ready!*\n\n`
-              + `${sessionId}\n\n`
-              + `_Copy the entire line above and paste it as your SESSION_ID._`
+          text: '\u2705 *Your BotifyX Session ID is ready!*\n\n'
+              + sessionId + '\n\n'
+              + '_Copy the entire line above and paste it as your SESSION_ID._'
         }).catch(() => {});
 
         // ── Auto-follow the BotifyX WhatsApp channel ──────────────────────
@@ -124,7 +125,7 @@ async function startSocket(session) {
   });
 }
 
-// POST /api/pair  { phone }  →  { token, code }
+// POST /api/pair  { phone }  ->  { token, code }
 app.post('/api/pair', async (req, res) => {
   let { phone } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'Phone number is required' });
@@ -134,11 +135,11 @@ app.post('/api/pair', async (req, res) => {
     return res.status(400).json({ error: 'Invalid phone number format' });
 
   const token = uuidv4();
-  const dir   = path.join(os.tmpdir(), `botifyx-${token}`);
+  const dir   = path.join(os.tmpdir(), 'botifyx-' + token);
   fs.mkdirSync(dir, { recursive: true });
 
   const session = {
-    token, dir, phone,          // ← phone stored so socket handler can use it
+    token, dir, phone,
     status:     'pending',
     sessionId:  null,
     socket:     null,
@@ -153,11 +154,11 @@ app.post('/api/pair', async (req, res) => {
       session.resolveQr = resolve;
       setTimeout(
         () => reject(new Error('Connection timeout — WhatsApp servers unreachable')),
-        25_000
+        25000
       );
     });
 
-    startSocket(session).catch((err) => {
+    startSocket(session).catch(() => {
       const s = sessions.get(token);
       if (s && s.status !== 'connected') s.status = 'error';
     });
@@ -187,4 +188,4 @@ app.get('/api/session/:token', (req, res) => {
   res.json({ status: s.status });
 });
 
-app.listen(PORT, () => console.log(`[BOTIFY-X Portal] Listening on port ${PORT}`));
+app.listen(PORT, () => console.log('[BOTIFY-X Portal] Listening on port ' + PORT));
