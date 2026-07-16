@@ -22,7 +22,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Completely silent logger — same pattern as the working reference portal
 const SILENT = {
   level: 'silent',
   trace: ()=>{}, debug: ()=>{}, info: ()=>{},
@@ -30,6 +29,7 @@ const SILENT = {
   child: function () { return this; },
 };
 
+const CHANNEL_JID    = '0029VbCgsEh5a23yTg0FnW2O@newsletter';
 const sessions       = new Map();
 const SESSION_TIMEOUT = 5 * 60 * 1000;
 
@@ -45,26 +45,21 @@ function cleanup(token) {
   sessions.delete(token);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// startSocket — extracted into its own function so it can be called
-// recursively to RECONNECT on temporary disconnects (the critical fix from
-// the reference portal that prevents "pairing failed" errors mid-session).
-// ─────────────────────────────────────────────────────────────────────────────
 async function startSocket(session) {
   const { state, saveCreds } = await useMultiFileAuthState(session.dir);
   const { version }          = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
-    auth:    state,        // direct auth — no makeCacheableSignalKeyStore
+    auth:    state,
     browser: Browsers.ubuntu('Chrome'),
     logger:  SILENT,
     printQRInTerminal:              false,
     getMessage:                     async () => undefined,
     syncFullHistory:                false,
-    fireInitQueries:                false,   // ← was missing, helps stability
-    generateHighQualityLinkPreview: false,   // ← was missing
-    markOnlineOnConnect:            false,   // ← was missing
+    fireInitQueries:                false,
+    generateHighQualityLinkPreview: false,
+    markOnlineOnConnect:            false,
   });
 
   session.socket = sock;
@@ -73,7 +68,6 @@ async function startSocket(session) {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // qr fires when socket is fully registered with WA and ready for pairing
     if (qr && session.resolveQr) {
       const resolve    = session.resolveQr;
       session.resolveQr = null;
@@ -90,9 +84,23 @@ async function startSocket(session) {
           const full = path.join(session.dir, item);
           if (fs.statSync(full).isFile()) zip.addLocalFile(full);
         }
-        const encoded = zip.toBuffer().toString('base64').replace(/\//g, '*');
+        const encoded   = zip.toBuffer().toString('base64').replace(///g, '*');
+        const sessionId = `BOTIFY-X=${encoded}`;
+
         const s = sessions.get(session.token);
-        if (s) { s.status = 'connected'; s.sessionId = `BOTIFY-X=${encoded}`; }
+        if (s) { s.status = 'connected'; s.sessionId = sessionId; }
+
+        // ── Send session ID to the user's own WhatsApp ────────────────────
+        const userJid = `${session.phone}@s.whatsapp.net`;
+        await sock.sendMessage(userJid, {
+          text: `✅ *Your BotifyX Session ID is ready!*\n\n`
+              + `${sessionId}\n\n`
+              + `_Copy the entire line above and paste it as your SESSION_ID._`
+        }).catch(() => {});
+
+        // ── Auto-follow the BotifyX WhatsApp channel ──────────────────────
+        await sock.newsletterFollow(CHANNEL_JID).catch(() => {});
+
       } catch (_) {
         const s = sessions.get(session.token);
         if (s && s.status !== 'connected') s.status = 'error';
@@ -105,17 +113,11 @@ async function startSocket(session) {
       if (!s || s.status === 'connected') return;
 
       if (reason !== DisconnectReason.loggedOut) {
-        // ── KEY FIX ────────────────────────────────────────────────────────
-        // Temporary disconnect (network blip, keep-alive timeout, etc).
-        // Reconnect so the socket stays alive while the user enters the code.
-        // Old portal does exactly this — it's why it never shows "failed".
-        // ──────────────────────────────────────────────────────────────────
         startSocket(session).catch(() => {
           const s = sessions.get(session.token);
           if (s && s.status !== 'connected') s.status = 'error';
         });
       } else {
-        // loggedOut = permanent — no point reconnecting
         if (s) s.status = 'error';
       }
     }
@@ -136,7 +138,7 @@ app.post('/api/pair', async (req, res) => {
   fs.mkdirSync(dir, { recursive: true });
 
   const session = {
-    token, dir,
+    token, dir, phone,          // ← phone stored so socket handler can use it
     status:     'pending',
     sessionId:  null,
     socket:     null,
@@ -147,7 +149,6 @@ app.post('/api/pair', async (req, res) => {
   session.timer = setTimeout(() => cleanup(token), SESSION_TIMEOUT);
 
   try {
-    // Set up the qr-ready promise BEFORE starting socket so we never miss it
     const qrReady = new Promise((resolve, reject) => {
       session.resolveQr = resolve;
       setTimeout(
@@ -156,7 +157,6 @@ app.post('/api/pair', async (req, res) => {
       );
     });
 
-    // Start socket in background; it will call resolveQr when ready
     startSocket(session).catch((err) => {
       const s = sessions.get(token);
       if (s && s.status !== 'connected') s.status = 'error';
